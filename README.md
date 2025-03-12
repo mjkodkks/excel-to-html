@@ -1,5 +1,5 @@
 # EXCEL TO HTML
-## requirements
+## Requirements
 - python 3.11 or above
 - install LibreOffice https://www.libreoffice.org/download/download-libreoffice/
 - map soffice to executable location.
@@ -14,7 +14,7 @@ soffice --version
 ## How to run
 - from your python and pip
 ```
-pip install -r /path/to/requirements.txt
+pip install -r requirements.txt
 
 ```
 - copy all excel file to folder ```excel_files```
