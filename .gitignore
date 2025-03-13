@@ -181,3 +181,5 @@ output_html/**/*
 output.csv
 
 .DS_Store
+
+backup/*

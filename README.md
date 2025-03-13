@@ -24,4 +24,4 @@ python app.py
 
 ```
 
-- check your output from ```output_html```
+- check your output from ```output_html``` and ```output.csv```

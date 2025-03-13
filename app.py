@@ -1,4 +1,5 @@
 # %%
+from datetime import datetime
 import glob
 import os
 import re
@@ -62,16 +63,44 @@ def read_all_html_files(file_pattern=output_folder + '/**/*.html', recursive=Tru
                 contentTxt = f.read()
                 print(len(contentTxt))
                 soup = BeautifulSoup(contentTxt, "html.parser")
-                body_content = soup.body.prettify().replace(",","")
+                tdBgcolor = soup.body.select("table td[bgcolor]")
+                tdAlign = soup.body.select("table td[align]")
+
+                # Add style background-color same as bgcolor attribute
+                for td in tdBgcolor:
+                    bgcolor = td["bgcolor"]
+                    existing_style = td.get("style", "")
+                    new_style = f"background-color: {bgcolor}; {existing_style}".strip()
+                    td["style"] = new_style 
+
+                # Add text position from align in td
+                for td in tdAlign:
+                    align = td["align"]
+                    if (align == 'middle'):
+                        align = 'center'
+                    existing_style = td.get("style", "")
+                    new_style = f"text-align: {align}; {existing_style}".strip()
+                    td["style"] = new_style 
+                
+                body_content = soup.body.decode_contents()
                 print(len(body_content))
-                minified = minify_html.minify(body_content, minify_js=True, minify_css=True, remove_processing_instructions=True)
-                print(len(minified))
+                # body_content = body_content.replace(",","").replace(".","")
+                # Regex pattern to match `data-sheets-value='...'`
+                patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
+                patternRemoveTag = r'<br.*?\/>|<img.*?>'
+
+                # Remove the attribute
+                body_content = re.sub(patternRemoveUnusedAttr, '', body_content)
+                body_content = re.sub(patternRemoveTag, '', body_content)
+                body_content = minify_html.minify(body_content, minify_js=False, minify_css=False, remove_processing_instructions=True, keep_spaces_between_attributes=True)
+                # print(len(minified))
                 contentsList.append({
                     "title": filename,
-                    "content": minified
+                    "content": body_content
                 })
         except Exception as e:
             print(f"Error reading {file}: {e}")
+            
         print("\n" + "="*50 + "\n")  # Separator for readability
 
     # print(contentsList)
@@ -80,7 +109,6 @@ def read_all_html_files(file_pattern=output_folder + '/**/*.html', recursive=Tru
 # Create output file from content
 def create_output_file_from_content(contents: list[dict[str, str]], output_name= "output.csv", is_salesforce=False):
     print("create_csv_from_content")
-    print(contents)
     if not contents:
         return 
     
@@ -107,13 +135,13 @@ def create_output_file_from_content(contents: list[dict[str, str]], output_name=
             "Category__c": []
         }
         
-        for content in contents:
-            ts = round(time.time())
-            urlMock = "URL-" + str(ts)
-            dataCreateCSV["Knowledge__kav"].append("")
-            dataCreateCSV["Id"].append("")
+        for index, content in enumerate(contents):
+            ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
+            urlMock = "URL-" + str(ts) + str(index)
+            dataCreateCSV["Knowledge__kav"].append(index)
+            dataCreateCSV["Id"].append("test")
             dataCreateCSV["RecordTypeId"].append("012N00000036GnwIAE")
-            dataCreateCSV["Title"].append(content["title"] + "(test-html-import)")
+            dataCreateCSV["Title"].append(content["title"] + "_(test-html-import)")
             dataCreateCSV["UrlName"].append(urlMock)
             dataCreateCSV["Summary"].append(content["title"])
             dataCreateCSV["Answer"].append(content["content"])
@@ -135,7 +163,7 @@ def create_output_file_from_content(contents: list[dict[str, str]], output_name=
         df.to_excel(output_name)
     
     elif (is_csv(output_name)):
-        df.to_csv(output_name, index=True, quotechar="'")
+        df.to_csv(output_name ,index=False)
 
 
 def is_excel_or_csv(filename: str) -> bool:
@@ -153,8 +181,3 @@ def is_csv(filename: str) -> bool:
 excel_to_HTML()
 readContent = read_all_html_files()
 create_output_file_from_content(readContent,is_salesforce=True)
-
-
-# %%
-
-
