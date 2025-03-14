@@ -14,6 +14,7 @@ import csv
 input_folder = "excel_files"  # Folder containing Excel files
 output_folder = "output_html"  # Folder to save HTML outputs
 output_result_folder = "output_result"  # Folder to output result outputs
+field_size_limit = 400000
 
 def excel_to_HTML():
     print("## Start EXCEL TO HTML ##")
@@ -87,6 +88,12 @@ def read_all_html_files():
 
                     body_content = soup.body.decode_contents()
 
+                    content_length = len(body_content)
+                    print(f"## content length : {content_length}")
+                    is_field_exceed = content_length >= field_size_limit
+                    if is_field_exceed:
+                        print('| field size limit exceed!', end=" ")
+
                     # Remove unnecessary attributes
                     patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
                     patternRemoveTag = r'<br.*?\/>|<img.*?>'
@@ -96,7 +103,8 @@ def read_all_html_files():
 
                     contents_list.append({
                         "title": filename,
-                        "content": body_content
+                        "content": body_content,
+                        "is_field_exceed": is_field_exceed
                     })
             except Exception as e:
                 print(f"Error reading {file}: {e}")
@@ -108,16 +116,16 @@ def read_all_html_files():
 
 def create_output_files(all_contents):
     print("## Creating Output CSV Files ##")
+
+    # Remove all items in output_html
+    shutil.rmtree(output_result_folder, ignore_errors=True)
+
+    # Ensure output directory exists
+    os.makedirs(output_result_folder, exist_ok=True)
     
     for folder_index, contents in all_contents.items():
         output_filename = f"output-{folder_index}.csv"
         print(f"Creating: {output_filename}")
-
-        # Remove all items in output_html
-        shutil.rmtree(output_result_folder, ignore_errors=True)
-
-        # Ensure output directory exists
-        os.makedirs(output_result_folder, exist_ok=True)
 
         output_result_path = os.path.join(output_result_folder, output_filename)
         
@@ -154,7 +162,50 @@ def create_output_files(all_contents):
         df = pd.DataFrame(dataCreateCSV)
         df.to_csv(output_result_path, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
 
-    print("All output CSV files created successfully!")
+    ## create result sum all file to one csv file.
+    sum_all_content = []
+    for item in all_contents.items():
+        key, value = item 
+        if len(item) == 0:
+            return
+    
+        sum_all_content.append((value[0]))
+    
+    dataCreateCSVOne = {
+        "Knowledge__kav": [],
+        "Id": [],
+        "RecordTypeId": [],
+        "Title": [],
+        "UrlName": [],
+        "Summary": [],
+        "Answer": [],
+        "Categorie__c": [],
+        "Category__c": []
+    }
+    
+    for index, obj in enumerate(sum_all_content): 
+        if obj["is_field_exceed"]:
+            print("found obj that has field exceed")
+            print(obj["title"], end=" | ")
+            continue
+        ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
+        urlMock = f"URL-{ts}{index}"
+        dataCreateCSVOne["Knowledge__kav"].append(index)
+        dataCreateCSVOne["Id"].append("test")
+        dataCreateCSVOne["RecordTypeId"].append("012N00000036GnwIAE")
+        dataCreateCSVOne["Title"].append(obj["title"] + "_(test-html-import)")
+        dataCreateCSVOne["UrlName"].append(urlMock)
+        dataCreateCSVOne["Summary"].append(obj["title"])
+        dataCreateCSVOne["Answer"].append(obj["content"])
+        dataCreateCSVOne["Categorie__c"].append("Auto Import")
+        dataCreateCSVOne["Category__c"].append("Knowledge Material")
+    
+    df = pd.DataFrame(dataCreateCSVOne)
+    name_result_one_csv = "output.csv"
+    path_of_one_file = os.path.join(output_result_folder, name_result_one_csv)
+    df.to_csv(path_of_one_file, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
+    print(f"Creating: {name_result_one_csv}")
+    print("One for all CSV file created successfully!")
 
 
 def is_excel_or_csv(filename: str) -> bool:
@@ -172,3 +223,4 @@ def is_csv(filename: str) -> bool:
 excel_to_HTML()
 html_data = read_all_html_files()
 create_output_files(html_data)
+# %%
