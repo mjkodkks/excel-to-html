@@ -9,16 +9,17 @@ import minify_html
 import pandas as pd
 import shutil
 from bs4 import BeautifulSoup
+import csv
 
 input_folder = "excel_files"  # Folder containing Excel files
 output_folder = "output_html"  # Folder to save HTML outputs
 
 def excel_to_HTML():
     print("## Start EXCEL TO HTML ##")
-    # Remove all item in output_html
+    # Remove all items in output_html
     shutil.rmtree(output_folder, ignore_errors=True)
 
-     # Ensure output directory exists
+    # Ensure output directory exists
     os.makedirs(output_folder, exist_ok=True)
 
     # Get all Excel files in the folder
@@ -26,7 +27,7 @@ def excel_to_HTML():
 
     # Convert each Excel file separately
     for index, file in enumerate(excel_files):
-        print(file)
+        print(f"Processing file: {file}")
         base_name, _ = os.path.splitext(file)  # Get file name without extension
         file_output_folder = os.path.join(output_folder, f"{index}_{base_name}")
 
@@ -47,82 +48,74 @@ def excel_to_HTML():
 
     print("Conversion completed!")
 
-# Read all HTML files in the folder
-def read_all_html_files(file_pattern=output_folder + '/**/*.html', recursive=True):
-    print("read_all_html_files")
+def read_all_html_files():
+    print("## Read All HTML Files ##")
     os.makedirs(output_folder, exist_ok=True)
-    files = glob.glob(file_pattern, recursive=recursive)
-    print('allfile')
-    print(files)
-    contentsList = []
-    for file in files:
-        print(f"--- {file} ---")
-        try:
-            filename = os.path.basename(file)
-            with open(file, 'r', encoding='utf-8') as f:
-                contentTxt = f.read()
-                print(len(contentTxt))
-                soup = BeautifulSoup(contentTxt, "html.parser")
-                tdBgcolor = soup.body.select("table td[bgcolor]")
-                tdAlign = soup.body.select("table td[align]")
+    html_folders = glob.glob(output_folder + '/*')  # Get all subfolders
+    all_contents = {}
 
-                # Add style background-color same as bgcolor attribute
-                for td in tdBgcolor:
-                    bgcolor = td["bgcolor"]
-                    existing_style = td.get("style", "")
-                    new_style = f"background-color: {bgcolor}; {existing_style}".strip()
-                    td["style"] = new_style 
+    for folder in html_folders:
+        folder_index = os.path.basename(folder).split("_")[0]  # Extract folder index
+        print(f"Processing folder: {folder}")
 
-                # Add text position from align in td
-                for td in tdAlign:
-                    align = td["align"]
-                    if (align == 'middle'):
-                        align = 'center'
-                    existing_style = td.get("style", "")
-                    new_style = f"text-align: {align}; {existing_style}".strip()
-                    td["style"] = new_style 
-                
-                body_content = soup.body.decode_contents()
-                print(len(body_content))
-                # body_content = body_content.replace(",","").replace(".","")
-                # Regex pattern to match `data-sheets-value='...'`
-                patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
-                patternRemoveTag = r'<br.*?\/>|<img.*?>'
+        files = glob.glob(folder + '/*.html')  # Get all HTML files in the folder
+        contents_list = []
+        for file in files:
+            print(f"Reading file: {file}")
+            try:
+                filename = os.path.basename(file)
+                with open(file, 'r', encoding='utf-8') as f:
+                    contentTxt = f.read()
+                    soup = BeautifulSoup(contentTxt, "html.parser")
+                    
+                    # Modify styles
+                    tdBgcolor = soup.body.select("table td[bgcolor]")
+                    tdAlign = soup.body.select("table td[align]")
 
-                # Remove the attribute
-                body_content = re.sub(patternRemoveUnusedAttr, '', body_content)
-                body_content = re.sub(patternRemoveTag, '', body_content)
-                body_content = minify_html.minify(body_content, minify_js=False, minify_css=False, remove_processing_instructions=True, keep_spaces_between_attributes=True)
-                # print(len(minified))
-                contentsList.append({
-                    "title": filename,
-                    "content": body_content
-                })
-        except Exception as e:
-            print(f"Error reading {file}: {e}")
-            
-        print("\n" + "="*50 + "\n")  # Separator for readability
+                    for td in tdBgcolor:
+                        bgcolor = td["bgcolor"]
+                        existing_style = td.get("style", "")
+                        td["style"] = f"background-color: {bgcolor}; {existing_style}".strip()
 
-    # print(contentsList)
-    return contentsList
+                    for td in tdAlign:
+                        align = td["align"]
+                        if align == 'middle':
+                            align = 'center'
+                        existing_style = td.get("style", "")
+                        td["style"] = f"text-align: {align}; {existing_style}".strip()
 
-# Create output file from content
-def create_output_file_from_content(contents: list[dict[str, str]], output_name= "output.csv", is_salesforce=False):
-    print("create_csv_from_content")
-    if not contents:
-        return 
+                    body_content = soup.body.decode_contents()
+
+                    # Remove unnecessary attributes
+                    patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
+                    patternRemoveTag = r'<br.*?\/>|<img.*?>'
+                    body_content = re.sub(patternRemoveUnusedAttr, '', body_content)
+                    body_content = re.sub(patternRemoveTag, '', body_content)
+                    body_content = minify_html.minify(body_content, minify_js=False, minify_css=False, remove_processing_instructions=True, keep_spaces_between_attributes=True)
+
+                    contents_list.append({
+                        "title": filename,
+                        "content": body_content
+                    })
+            except Exception as e:
+                print(f"Error reading {file}: {e}")
+
+        # Store content list by folder index
+        all_contents[folder_index] = contents_list
+
+    return all_contents
+
+def create_output_files(all_contents):
+    print("## Creating Output CSV Files ##")
     
-    if is_excel_or_csv(output_name) is False:
-        print("file type not support")
-        return
+    for folder_index, contents in all_contents.items():
+        output_filename = f"output-{folder_index}.csv"
+        print(f"Creating: {output_filename}")
 
-    if os.path.exists(output_name):
-        os.remove(output_name)
-        print("Already delete previous output file")
-    else:
-        print("The file does not exist")
+        if not contents:
+            print(f"No content found for folder {folder_index}, skipping.")
+            continue
 
-    if is_salesforce: 
         dataCreateCSV = {
             "Knowledge__kav": [],
             "Id": [],
@@ -134,10 +127,10 @@ def create_output_file_from_content(contents: list[dict[str, str]], output_name=
             "Categorie__c": [],
             "Category__c": []
         }
-        
+
         for index, content in enumerate(contents):
             ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
-            urlMock = "URL-" + str(ts) + str(index)
+            urlMock = f"URL-{ts}{index}"
             dataCreateCSV["Knowledge__kav"].append(index)
             dataCreateCSV["Id"].append("test")
             dataCreateCSV["RecordTypeId"].append("012N00000036GnwIAE")
@@ -147,23 +140,11 @@ def create_output_file_from_content(contents: list[dict[str, str]], output_name=
             dataCreateCSV["Answer"].append(content["content"])
             dataCreateCSV["Categorie__c"].append("")
             dataCreateCSV["Category__c"].append("Knowledge Material")
-    else:
-        dataCreateCSV = {
-            "Title": [],
-            "Content": [],
-        }   
 
-        for content in contents:
-            dataCreateCSV["Title"].append(content["title"])
-            dataCreateCSV["Content"].append(content["content"])
+        df = pd.DataFrame(dataCreateCSV)
+        df.to_csv(output_filename, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
 
-    df = pd.DataFrame(dataCreateCSV)
-
-    if (is_excel(output_name)):
-        df.to_excel(output_name)
-    
-    elif (is_csv(output_name)):
-        df.to_csv(output_name ,index=False)
+    print("All output CSV files created successfully!")
 
 
 def is_excel_or_csv(filename: str) -> bool:
@@ -179,5 +160,5 @@ def is_csv(filename: str) -> bool:
     return bool(re.match(pattern, filename, re.IGNORECASE))
 
 excel_to_HTML()
-readContent = read_all_html_files()
-create_output_file_from_content(readContent,is_salesforce=True)
+html_data = read_all_html_files()
+create_output_files(html_data)
