@@ -183,3 +183,5 @@ output.csv
 .DS_Store
 
 backup/*
+
+output_result/**/*

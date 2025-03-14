@@ -13,6 +13,7 @@ import csv
 
 input_folder = "excel_files"  # Folder containing Excel files
 output_folder = "output_html"  # Folder to save HTML outputs
+output_result_folder = "output_result"  # Folder to output result outputs
 
 def excel_to_HTML():
     print("## Start EXCEL TO HTML ##")
@@ -112,6 +113,15 @@ def create_output_files(all_contents):
         output_filename = f"output-{folder_index}.csv"
         print(f"Creating: {output_filename}")
 
+        # Remove all items in output_html
+        shutil.rmtree(output_result_folder, ignore_errors=True)
+
+        # Ensure output directory exists
+        os.makedirs(output_result_folder, exist_ok=True)
+
+        output_result_path = os.path.join(output_result_folder, output_filename)
+        
+
         if not contents:
             print(f"No content found for folder {folder_index}, skipping.")
             continue
@@ -138,11 +148,11 @@ def create_output_files(all_contents):
             dataCreateCSV["UrlName"].append(urlMock)
             dataCreateCSV["Summary"].append(content["title"])
             dataCreateCSV["Answer"].append(content["content"])
-            dataCreateCSV["Categorie__c"].append("")
+            dataCreateCSV["Categorie__c"].append("Auto Import")
             dataCreateCSV["Category__c"].append("Knowledge Material")
 
         df = pd.DataFrame(dataCreateCSV)
-        df.to_csv(output_filename, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
+        df.to_csv(output_result_path, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
 
     print("All output CSV files created successfully!")
 
