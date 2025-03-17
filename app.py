@@ -114,6 +114,8 @@ def read_all_html_files():
                         body_content = table.prettify()
                         if is_table_more_than_one:
                             title = f'{filename}_{name_of_sheet[index].getText()}'
+                        else:
+                            title = filename
 
                         content_length = len(body_content)
                         print(f"## content length : {content_length}")
