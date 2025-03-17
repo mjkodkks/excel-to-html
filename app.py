@@ -4,7 +4,6 @@ import glob
 import os
 import re
 import subprocess
-import time
 import minify_html
 import pandas as pd
 import shutil
@@ -69,10 +68,27 @@ def read_all_html_files():
                 with open(file, 'r', encoding='utf-8') as f:
                     contentTxt = f.read()
                     soup = BeautifulSoup(contentTxt, "html.parser")
+                    tables = soup.body.select("table")
+                    name_of_sheet = soup.body.find_all("a", attrs={"name": True})
+                    count_table = len(tables)
+                    is_table_more_than_one = count_table > 1
+
+                    if is_table_more_than_one:
+                        print(count_table)
                     
                     # Modify styles
                     tdBgcolor = soup.body.select("table td[bgcolor]")
                     tdAlign = soup.body.select("table td[align]")
+                    fontTag = soup.body.select("td font")
+                    dataSheetsValue = soup.find_all(attrs={"data-sheets-value": True})
+                    brAndImage = soup.find_all(["br", "img"])
+
+                    for font in fontTag:
+                        color = font.get("color", "")
+                        if color != "#000000":
+                            continue
+                        text = font.get_text()
+                        font.replace_with(text)
 
                     for td in tdBgcolor:
                         bgcolor = td["bgcolor"]
@@ -85,27 +101,39 @@ def read_all_html_files():
                             align = 'center'
                         existing_style = td.get("style", "")
                         td["style"] = f"text-align: {align}; {existing_style}".strip()
+                    
+                    # Remove the data-sheets-value attribute from all elements
+                    for tag in dataSheetsValue:
+                        del tag["data-sheets-value"]
 
-                    body_content = soup.body.decode_contents()
+                    # Remove <br> and <img> tags
+                    for tag in brAndImage:
+                        tag.decompose()
 
-                    content_length = len(body_content)
-                    print(f"## content length : {content_length}")
-                    is_field_exceed = content_length >= field_size_limit
-                    if is_field_exceed:
-                        print('| field size limit exceed!', end=" ")
+                    for index, table in enumerate(tables):
+                        body_content = table.prettify()
+                        if is_table_more_than_one:
+                            title = f'{filename}_{name_of_sheet[index].getText()}'
 
-                    # Remove unnecessary attributes
-                    patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
-                    patternRemoveTag = r'<br.*?\/>|<img.*?>'
-                    body_content = re.sub(patternRemoveUnusedAttr, '', body_content)
-                    body_content = re.sub(patternRemoveTag, '', body_content)
-                    body_content = minify_html.minify(body_content, minify_js=False, minify_css=False, remove_processing_instructions=True, keep_spaces_between_attributes=True)
+                        content_length = len(body_content)
+                        print(f"## content length : {content_length}")
+                        is_field_exceed = content_length >= field_size_limit
+                        if is_field_exceed:
+                            print('| field size limit exceed!', end=" ")
 
-                    contents_list.append({
-                        "title": filename,
-                        "content": body_content,
-                        "is_field_exceed": is_field_exceed
-                    })
+                        # Remove unnecessary attributes
+                        # patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
+                        # patternRemoveTag = r'<br.*?\/>|<img.*?>'
+                        # body_content = re.sub(patternRemoveUnusedAttr, '', body_content)
+                        # body_content = re.sub(patternRemoveTag, '', body_content)
+                        body_content = minify_html.minify(body_content, keep_closing_tags=True, minify_js=False, minify_css=False, remove_processing_instructions=True, keep_spaces_between_attributes=True)
+
+                        contents_list.append({
+                            "title": title,
+                            "content": body_content,
+                            "parent_title": folder,
+                            "is_field_exceed": is_field_exceed
+                        })
             except Exception as e:
                 print(f"Error reading {file}: {e}")
 
@@ -125,6 +153,7 @@ def create_output_files(all_contents):
     
     for folder_index, contents in all_contents.items():
         output_filename = f"output-{folder_index}.csv"
+        output_filename_html = f"output-{folder_index}.html"
         print(f"Creating: {output_filename}")
 
         output_result_path = os.path.join(output_result_folder, output_filename)
@@ -162,14 +191,18 @@ def create_output_files(all_contents):
         df = pd.DataFrame(dataCreateCSV)
         df.to_csv(output_result_path, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
 
+        for index, content in enumerate(contents):
+            with open(os.path.join(output_result_folder, output_filename_html), "w", encoding="utf-8") as f:
+                f.write(content["content"])
+
     ## create result sum all file to one csv file.
     sum_all_content = []
     for item in all_contents.items():
         key, value = item 
         if len(item) == 0:
             return
-    
-        sum_all_content.append((value[0]))
+        for sheet in value:
+            sum_all_content.append((sheet))
     
     dataCreateCSVOne = {
         "Knowledge__kav": [],
@@ -190,10 +223,12 @@ def create_output_files(all_contents):
             continue
         ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
         urlMock = f"URL-{ts}{index}"
+        
         dataCreateCSVOne["Knowledge__kav"].append(index)
         dataCreateCSVOne["Id"].append("test")
         dataCreateCSVOne["RecordTypeId"].append("012N00000036GnwIAE")
-        dataCreateCSVOne["Title"].append(obj["title"] + "_(test-html-import)")
+
+        dataCreateCSVOne["Title"].append(obj["title"])
         dataCreateCSVOne["UrlName"].append(urlMock)
         dataCreateCSVOne["Summary"].append(obj["title"])
         dataCreateCSVOne["Answer"].append(obj["content"])
