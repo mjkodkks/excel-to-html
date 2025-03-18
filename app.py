@@ -9,6 +9,7 @@ import pandas as pd
 import shutil
 from bs4 import BeautifulSoup
 import csv
+from pathlib import Path
 
 input_folder = "excel_files"  # Folder containing Excel files
 output_folder = "output_html"  # Folder to save HTML outputs
@@ -64,7 +65,7 @@ def read_all_html_files():
         for file in files:
             print(f"Reading file: {file}")
             try:
-                filename = os.path.basename(file)
+                filename = Path(file).stem
                 with open(file, 'r', encoding='utf-8') as f:
                     contentTxt = f.read()
                     soup = BeautifulSoup(contentTxt, "html.parser")
