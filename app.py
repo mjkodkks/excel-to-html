@@ -1,4 +1,5 @@
 # %%
+import base64
 from datetime import datetime
 import glob
 import os
@@ -10,6 +11,7 @@ import shutil
 from bs4 import BeautifulSoup
 import csv
 from pathlib import Path
+from urllib.parse import unquote
 
 input_folder = "excel_files"  # Folder containing Excel files
 output_folder = "output_html"  # Folder to save HTML outputs
@@ -83,6 +85,8 @@ def read_all_html_files():
                     fontTag = soup.body.select("td font")
                     dataSheetsValue = soup.find_all(attrs={"data-sheets-value": True})
                     brAndImage = soup.find_all(["br", "img"])
+                    fontBlack = soup.body.select("font[color='#000000']")
+                    imageTag = soup.body.select("img")
 
                     for font in fontTag:
                         color = font.get("color", "")
@@ -108,8 +112,26 @@ def read_all_html_files():
                         del tag["data-sheets-value"]
 
                     # Remove <br> and <img> tags
-                    for tag in brAndImage:
-                        tag.decompose()
+                    # for tag in brAndImage:
+                    #     tag.decompose()
+
+                    # for tag in fontBlack:
+                    #     del tag["color"]
+
+                    # convert image src from image file to base64
+                    # for tag in imageTag:
+                    #     src = tag.get("src", "")
+                    #     # unquoted_src = unquote(src)
+                    #     tag["data-src"] = src
+                    #     
+                        # path_to_open_image = os.path.join(folder, unquoted_src)
+                        # if not os.path.exists(path_to_open_image):
+                        #     print(f"Image file not found: {path_to_open_image}")
+                        #     continue
+                        # with open(path_to_open_image, "rb") as image_file:
+                        #     imageByte = image_file.read()
+                        #     base64_image = base64.b64encode(imageByte).decode("utf-8")  # Encode to base64 and decode to string
+                        #     tag["src"] = f"data:image/png;base64,{base64_image}"
 
                     for index, table in enumerate(tables):
                         body_content = table.prettify()
@@ -118,18 +140,18 @@ def read_all_html_files():
                         else:
                             title = filename
 
-                        content_length = len(body_content)
-                        print(f"## content length : {content_length}")
-                        is_field_exceed = content_length >= field_size_limit
-                        if is_field_exceed:
-                            print('| field size limit exceed!', end=" ")
-
                         # Remove unnecessary attributes
                         # patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
                         # patternRemoveTag = r'<br.*?\/>|<img.*?>'
                         # body_content = re.sub(patternRemoveUnusedAttr, '', body_content)
                         # body_content = re.sub(patternRemoveTag, '', body_content)
                         body_content = minify_html.minify(body_content, keep_closing_tags=True, minify_js=False, minify_css=False, remove_processing_instructions=True, keep_spaces_between_attributes=True)
+                        
+                        content_length = len(body_content)
+                        print(f"## content length : {content_length}")
+                        is_field_exceed = content_length >= field_size_limit
+                        if is_field_exceed:
+                            print('| field size limit exceed!', end=" ")
 
                         contents_list.append({
                             "title": title,
