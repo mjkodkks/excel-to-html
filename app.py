@@ -87,13 +87,31 @@ def read_all_html_files():
                     brAndImage = soup.find_all(["br", "img"])
                     fontBlack = soup.body.select("font[color='#000000']")
                     imageTag = soup.body.select("img")
+                    fontAllTag = soup.body.find_all("font")
 
-                    for font in fontTag:
-                        color = font.get("color", "")
-                        if color != "#000000":
-                            continue
-                        text = font.get_text()
-                        font.replace_with(text)
+                    font_sizes = {"1": "10px", "2": "13px", "3": "16px", "4": "18px", "5": "24px", "6": "32px", "7": "48px"}
+                    for font in fontAllTag:
+                        style_parts = []
+                        if font.has_attr("size"):
+                            size = font_sizes.get(font["size"], "16px")
+                            style_parts.append(f"font-size: {size};")
+                        
+                        if font.has_attr("color"):
+                            style_parts.append(f"color: {font['color']};")
+                        
+                        if font.has_attr("face"):
+                            style_parts.append(f"font-family: {font['face']};")
+                        
+                        span_tag = soup.new_tag("span", style=" ".join(style_parts))
+                        span_tag.string = font.string if font.string else ""
+                        font.replace_with(span_tag)
+
+                    # for font in fontTag:
+                    #     color = font.get("color", "")
+                    #     if color != "#000000":
+                    #         continue
+                    #     text = font.get_text()
+                    #     font.replace_with(text)
 
                     for td in tdBgcolor:
                         bgcolor = td["bgcolor"]
