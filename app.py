@@ -13,56 +13,64 @@ import csv
 from pathlib import Path
 from urllib.parse import unquote
 
-input_folder = "excel_files"  # Folder containing Excel files
-output_folder = "output_html"  # Folder to save HTML outputs
-output_result_folder = "output_result"  # Folder to output result outputs
+input_folder = Path("excel_files")  # Folder containing Excel files
+output_folder = Path("output_html")  # Folder to save HTML outputs
+output_result_folder = Path("output_result")  # Folder to output result outputs
 field_size_limit = 400000
 
-def excel_to_HTML():
+def excel_to_html():
     print("## Start EXCEL TO HTML ##")
-    # Remove all items in output_html
-    shutil.rmtree(output_folder, ignore_errors=True)
+    
+    # Remove all items in output_html safely
+    if output_folder.exists():
+        shutil.rmtree(output_folder)
 
     # Ensure output directory exists
-    os.makedirs(output_folder, exist_ok=True)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     # Get all Excel files in the folder
-    excel_files = [f for f in os.listdir(input_folder) if f.endswith((".xlsx", ".xls"))]
+    excel_files = list(input_folder.glob("*.xlsx")) + list(input_folder.glob("*.xls"))
+
+    if not excel_files:
+        print("No Excel files found.")
+        return
 
     # Convert each Excel file separately
     for index, file in enumerate(excel_files):
-        print(f"Processing file: {file}")
-        base_name, _ = os.path.splitext(file)  # Get file name without extension
-        file_output_folder = os.path.join(output_folder, f"{index}_{base_name}")
+        print(f"Processing file: {file.name}")
+        base_name = file.stem  # Get file name without extension
+        file_output_folder = output_folder / f"{index}_{base_name}"
 
         # Create a separate folder for each file
-        os.makedirs(file_output_folder, exist_ok=True)
+        file_output_folder.mkdir(parents=True, exist_ok=True)
 
-        # Full input file path
-        input_path = os.path.join(input_folder, file)
-
-        # Convert Excel to HTML inside the specific folder
-        subprocess.run([
-            "soffice",
-            "--headless",
-            "--convert-to", "html",
-            "--outdir", file_output_folder,
-            input_path
-        ], check=True)
+        try:
+            # Convert Excel to HTML using LibreOffice
+            subprocess.run([
+                "soffice",
+                "--headless",
+                "--convert-to", "html",
+                "--outdir", str(file_output_folder.resolve()),
+                str(file.resolve())
+            ], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error converting {file.name}: {e}")
 
     print("Conversion completed!")
 
 def read_all_html_files():
     print("## Read All HTML Files ##")
-    os.makedirs(output_folder, exist_ok=True)
-    html_folders = glob.glob(output_folder + '/*')  # Get all subfolders
+    if not output_folder.is_dir():
+        print("output_html folder not found.")
+        return  # Ensure output folder exists
+    html_folders = [folder for folder in output_folder.iterdir() if folder.is_dir()]  # Get all subdirectories
     all_contents = {}
 
     for folder in html_folders:
         folder_index = os.path.basename(folder).split("_")[0]  # Extract folder index
         print(f"Processing folder: {folder}")
 
-        files = glob.glob(folder + '/*.html')  # Get all HTML files in the folder
+        files = list(folder.glob("*.html"))  # Get all HTML files in the folder
         contents_list = []
         for file in files:
             print(f"Reading file: {file}")
@@ -298,7 +306,7 @@ def is_csv(filename: str) -> bool:
     pattern = r'.*\.(csv)$'
     return bool(re.match(pattern, filename, re.IGNORECASE))
 
-excel_to_HTML()
+excel_to_html()
 html_data = read_all_html_files()
 create_output_files(html_data)
 # %%
