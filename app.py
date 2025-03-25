@@ -97,11 +97,20 @@ def read_all_html_files():
                     imageTag = soup.body.select("img")
                     fontAllTag = soup.body.find_all("font")
 
-                    font_sizes = {"1": "10px", "2": "13px", "3": "16px", "4": "18px", "5": "24px", "6": "32px", "7": "48px"}
+                    font_sizes = {
+                        "1": "x-small",  # <font size="1">
+                        "2": "small",    # <font size="2">
+                        "3": "medium",   # <font size="3">
+                        "4": "large",    # <font size="4">
+                        "5": "x-large",  # <font size="5">
+                        "6": "xx-large", # <font size="6">
+                        "7": "-webkit-xxx-large"  # <font size="7">
+                    }
+
                     for font in fontAllTag:
                         style_parts = []
                         if font.has_attr("size"):
-                            size = font_sizes.get(font["size"], "16px")
+                            size = font_sizes.get(font["size"], "medium")
                             style_parts.append(f"font-size: {size};")
                         
                         if font.has_attr("color"):
@@ -111,7 +120,7 @@ def read_all_html_files():
                             style_parts.append(f"font-family: {font['face']};")
                         
                         span_tag = soup.new_tag("span", style=" ".join(style_parts))
-                        span_tag.string = font.string if font.string else ""
+                        span_tag.string = font.getText()
                         font.replace_with(span_tag)
 
                     # for font in fontTag:
