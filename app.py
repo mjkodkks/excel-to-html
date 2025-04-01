@@ -315,7 +315,35 @@ def is_csv(filename: str) -> bool:
     pattern = r'.*\.(csv)$'
     return bool(re.match(pattern, filename, re.IGNORECASE))
 
+def remove_all_black_color_tags():
+    print("## Removing all #000000 styles and attributes from HTML ##")
+
+    if not output_folder.exists():
+        print("No output_html folder found.")
+        return
+
+    html_folders = [folder for folder in output_folder.iterdir() if folder.is_dir()]
+    
+    for folder in html_folders:
+        html_files = list(folder.glob("*.html"))
+        for html_file in html_files:
+            try:
+                with open(html_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                content = re.sub(r'(style\s*=\s*["\'][^"\']*)#000000\s*;?', r'\1', content, flags=re.IGNORECASE)
+                content = re.sub(r'\s*color\s*=\s*["\']#000000["\']', '', content, flags=re.IGNORECASE)
+                content = content.replace("#000000", "")
+
+                with open(html_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+                print(f"🧹 Cleaned all #000000 from: {html_file}")
+            except Exception as e:
+                print(f"Error cleaning {html_file}: {e}")
+
+
 excel_to_html()
 html_data = read_all_html_files()
 create_output_files(html_data)
+remove_all_black_color_tags()
 # %%
