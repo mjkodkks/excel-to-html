@@ -12,3 +12,5 @@ soupsieve==2.6
 typing_extensions==4.12.2
 tzdata==2025.1
 xlwings==0.33.11
+simple-salesforce==1.12.6
+dotenv==1.1.0
