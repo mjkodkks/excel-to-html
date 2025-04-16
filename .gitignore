@@ -177,6 +177,7 @@ myenv
 my_env
 
 excel_files/**/*
+input_files/**/*
 output_html/**/*
 
 output.csv
