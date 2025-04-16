@@ -1,4 +1,3 @@
-# %%
 import base64
 from datetime import datetime
 import glob
@@ -12,65 +11,204 @@ from bs4 import BeautifulSoup
 import csv
 from pathlib import Path
 from urllib.parse import unquote
+from simple_salesforce import Salesforce
+from dotenv import load_dotenv
 
-input_folder = Path("excel_files")  # Folder containing Excel files
-output_folder = Path("output_html")  # Folder to save HTML outputs
-output_result_folder = Path("output_result")  # Folder to output result outputs
+load_dotenv()
+
+sf = Salesforce(
+    username=os.getenv('SALESFORCE_USERNAME'),
+    password=os.getenv('SALESFORCE_PASSWORD'),
+    security_token=os.getenv('SALESFORCE_SECURITY_TOKEN'), 
+    domain=os.getenv('SALESFORCE_DOMAIN')
+)
+
+base_sfc_url = os.getenv('SALESFORCE_FILE_URL', 'https://your_instance.salesforce.com/sfc/servlet.shepherd/document/download/')
+
+try:
+    sf_identity = sf.User.describe()
+    print("✅ Connected to Salesforce successfully.")
+except Exception as e:
+    print("❌ Failed to connect to Salesforce:", e)
+
+input_folder = Path("excel_files")
+output_folder = Path("output_html")
+output_result_folder = Path("output_result")
 field_size_limit = 400000
 
 def excel_to_html():
     print("## Start EXCEL TO HTML ##")
-    
-    # Remove all items in output_html safely
     if output_folder.exists():
         shutil.rmtree(output_folder)
-
-    # Ensure output directory exists
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    # Get all Excel files in the folder
     excel_files = list(input_folder.glob("*.xlsx")) + list(input_folder.glob("*.xls"))
-
     if not excel_files:
         print("No Excel files found.")
         return
 
-    # Convert each Excel file separately
     for index, file in enumerate(excel_files):
         print(f"Processing file: {file.name}")
-        base_name = file.stem  # Get file name without extension
+        base_name = file.stem
         file_output_folder = output_folder / f"{index}_{base_name}"
-
-        # Create a separate folder for each file
         file_output_folder.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Convert Excel to HTML using LibreOffice
             subprocess.run([
-                "soffice",
-                "--headless",
-                "--convert-to", "html",
-                "--outdir", str(file_output_folder.resolve()),
-                str(file.resolve())
+                "soffice", "--headless", "--convert-to", "html",
+                "--outdir", str(file_output_folder.resolve()), str(file.resolve())
             ], check=True)
+
         except subprocess.CalledProcessError as e:
             print(f"Error converting {file.name}: {e}")
 
     print("Conversion completed!")
 
+def fetch_existing_file_titles():
+    query = """
+        SELECT ContentDocument.Title, ContentDocumentId 
+        FROM ContentVersion 
+        WHERE FileExtension = 'png'
+    """
+    results = sf.query_all(query)
+    title_to_id = {}
+    for record in results['records']:
+        title = record['ContentDocument']['Title'].lower().strip()
+        if title not in title_to_id:
+            title_to_id[title] = record['ContentDocumentId']
+    return title_to_id
+
+def rename_images_and_refs():
+    print("## Renaming images sequentially and updating HTML src ##")
+    rename_map = {}
+    for folder in output_folder.iterdir():
+        if not folder.is_dir():
+            continue
+
+        html_files = list(folder.glob("*.html"))
+        if not html_files:
+            continue
+
+        html_file = html_files[0]
+        with open(html_file, "r", encoding="utf-8") as f:
+            soup = BeautifulSoup(f.read(), "html.parser")
+
+        images = soup.find_all("img")
+
+        for idx, img in enumerate(images, start=1):
+            src = img.get("src", "")
+            src = unquote(src)
+            if src and src.endswith(".png"):
+                original_path = folder / Path(src).name
+                if original_path.exists():
+                    new_name = f"{folder.name.split('_', 1)[1]}_html_{idx}.png"
+                    new_path = folder / new_name
+                    print(f"🔄 Renaming {original_path.name} → {new_name}")
+                    original_path.rename(new_path)
+                    rename_map[new_name.lower().strip()] = str(new_path)
+                    img["src"] = new_name
+
+        with open(html_file, "w", encoding="utf-8") as f:
+            f.write(str(soup))
+
+    return rename_map
+
+def upload_missing_images(image_map, existing_titles):
+    print("## Uploading only unmatched images ##")
+    image_lookup = {}
+    for title, local_path in image_map.items():
+        if title in existing_titles:
+            print(f"⚠️ Skipping upload, already exists: {title}")
+            image_lookup[title] = existing_titles[title]
+        else:
+            with open(local_path, "rb") as f:
+                data = f.read()
+            encoded_file = base64.b64encode(data).decode("utf-8")
+
+            try:
+                response = sf.ContentVersion.create({
+                    "Title": Path(local_path).name,
+                    "PathOnClient": Path(local_path).name,
+                    "VersionData": encoded_file
+                })
+                version_id = response.get("id")
+                query = f"SELECT ContentDocumentId FROM ContentVersion WHERE Id = '{version_id}'"
+                result = sf.query(query)
+                doc_id = result['records'][0]['ContentDocumentId']
+                image_lookup[title] = doc_id
+                print(f"🖼️ Uploaded image: {local_path}")
+            except Exception as e:
+                print(f"❌ Failed to upload image: {local_path} — {e}")
+    return image_lookup
+
+def update_html_images(image_lookup):
+    for folder in output_folder.iterdir():
+        if not folder.is_dir():
+            continue
+        html_files = list(folder.glob("*.html"))
+        if not html_files:
+            continue
+
+        html_file = html_files[0]
+        with open(html_file, "r", encoding="utf-8") as f:
+            soup = BeautifulSoup(f.read(), "html.parser")
+
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            src = unquote(src)
+            filename = Path(src).name.lower().strip()
+            matched_doc_id = image_lookup.get(filename)
+            if matched_doc_id:
+                new_src = f"{base_sfc_url}{matched_doc_id}"
+                print(f"🔄 Replaced src '{src}' with '{new_src}'")
+                img["src"] = new_src
+            else:
+                print(f"⚠️ No match found for image: {filename}")
+
+        with open(html_file, "w", encoding="utf-8") as f:
+            f.write(str(soup))
+
+def remove_all_black_color_tags():
+    print("## Removing all #000000 styles and attributes from HTML ##")
+    if not output_folder.exists():
+        print("No output_html folder found.")
+        return
+
+    html_folders = [folder for folder in output_folder.iterdir() if folder.is_dir()]
+
+    for folder in html_folders:
+        html_files = list(folder.glob("*.html"))
+
+        for html_file in html_files:
+            try:
+                with open(html_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                content = re.sub(r'(style\s*=\s*[\"\'][^\"\']*)#000000\s*;?', r'\1', content, flags=re.IGNORECASE)
+                content = re.sub(r'\s*color\s*=\s*[\"\']#000000[\"\']', '', content, flags=re.IGNORECASE)
+                content = content.replace("#000000", "")
+
+                with open(html_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+                print(f"✅ Cleaned {html_file.name}")
+
+            except Exception as e:
+                print(f"❌ Error cleaning {html_file}: {e}")
+
 def read_all_html_files():
     print("## Read All HTML Files ##")
     if not output_folder.is_dir():
         print("output_html folder not found.")
-        return  # Ensure output folder exists
-    html_folders = [folder for folder in output_folder.iterdir() if folder.is_dir()]  # Get all subdirectories
+        return
+    html_folders = [folder for folder in output_folder.iterdir() if folder.is_dir()]
     all_contents = {}
 
     for folder in html_folders:
-        folder_index = os.path.basename(folder).split("_")[0]  # Extract folder index
+        folder_index = os.path.basename(folder).split("_")[0]
         print(f"Processing folder: {folder}")
 
-        files = list(folder.glob("*.html"))  # Get all HTML files in the folder
+        files = list(folder.glob("*.html"))
         contents_list = []
         for file in files:
             print(f"Reading file: {file}")
@@ -79,32 +217,20 @@ def read_all_html_files():
                 with open(file, 'r', encoding='utf-8') as f:
                     contentTxt = f.read()
                     soup = BeautifulSoup(contentTxt, "html.parser")
-                    tables = soup.body.select("table")
-                    name_of_sheet = soup.body.find_all("a", attrs={"name": True})
-                    count_table = len(tables)
-                    is_table_more_than_one = count_table > 1
 
-                    if is_table_more_than_one:
-                        print(count_table)
-                    
-                    # Modify styles
                     tdBgcolor = soup.body.select("table td[bgcolor]")
                     tdAlign = soup.body.select("table td[align]")
-                    fontTag = soup.body.select("td font")
                     dataSheetsValue = soup.find_all(attrs={"data-sheets-value": True})
-                    brAndImage = soup.find_all(["br", "img"])
-                    fontBlack = soup.body.select("font[color='#000000']")
-                    imageTag = soup.body.select("img")
                     fontAllTag = soup.body.find_all("font")
 
                     font_sizes = {
-                        "1": "x-small",  # <font size="1">
-                        "2": "small",    # <font size="2">
-                        "3": "medium",   # <font size="3">
-                        "4": "large",    # <font size="4">
-                        "5": "x-large",  # <font size="5">
-                        "6": "xx-large", # <font size="6">
-                        "7": "-webkit-xxx-large"  # <font size="7">
+                        "1": "x-small",
+                        "2": "small",
+                        "3": "medium",
+                        "4": "large",
+                        "5": "x-large",
+                        "6": "xx-large",
+                        "7": "-webkit-xxx-large"
                     }
 
                     for font in fontAllTag:
@@ -112,23 +238,13 @@ def read_all_html_files():
                         if font.has_attr("size"):
                             size = font_sizes.get(font["size"], "medium")
                             style_parts.append(f"font-size: {size};")
-                        
                         if font.has_attr("color"):
                             style_parts.append(f"color: {font['color']};")
-                        
                         if font.has_attr("face"):
                             style_parts.append(f"font-family: {font['face']};")
-                        
                         span_tag = soup.new_tag("span", style=" ".join(style_parts))
                         span_tag.string = font.getText()
                         font.replace_with(span_tag)
-
-                    # for font in fontTag:
-                    #     color = font.get("color", "")
-                    #     if color != "#000000":
-                    #         continue
-                    #     text = font.get_text()
-                    #     font.replace_with(text)
 
                     for td in tdBgcolor:
                         bgcolor = td["bgcolor"]
@@ -141,171 +257,57 @@ def read_all_html_files():
                             align = 'center'
                         existing_style = td.get("style", "")
                         td["style"] = f"text-align: {align}; {existing_style}".strip()
-                    
-                    # Remove the data-sheets-value attribute from all elements
+
                     for tag in dataSheetsValue:
                         del tag["data-sheets-value"]
 
-                    # Remove <br> and <img> tags
-                    # for tag in brAndImage:
-                    #     tag.decompose()
+                body_content = soup.body.encode_contents().decode("utf-8")
+                body_content = minify_html.minify(body_content, keep_closing_tags=True, minify_js=False, minify_css=False, do_not_minify_doctype=True)
 
-                    # for tag in fontBlack:
-                    #     del tag["color"]
+                contents_list.append({
+                    "title": filename,
+                    "content": body_content,
+                    "parent_title": folder,
+                    "is_field_exceed": len(body_content) >= field_size_limit
+                })
 
-                    # convert image src from image file to base64
-                    # for tag in imageTag:
-                    #     src = tag.get("src", "")
-                    #     # unquoted_src = unquote(src)
-                    #     tag["data-src"] = src
-                    #     
-                        # path_to_open_image = os.path.join(folder, unquoted_src)
-                        # if not os.path.exists(path_to_open_image):
-                        #     print(f"Image file not found: {path_to_open_image}")
-                        #     continue
-                        # with open(path_to_open_image, "rb") as image_file:
-                        #     imageByte = image_file.read()
-                        #     base64_image = base64.b64encode(imageByte).decode("utf-8")  # Encode to base64 and decode to string
-                        #     tag["src"] = f"data:image/png;base64,{base64_image}"
-
-                    for index, table in enumerate(tables):
-                        body_content = table.prettify()
-                        if is_table_more_than_one:
-                            title = f'{filename}_{name_of_sheet[index].getText()}'
-                        else:
-                            title = filename
-
-                        # Remove unnecessary attributes
-                        # patternRemoveUnusedAttr = r'\s*data-sheets-value=\'\{.*?\}\''
-                        # patternRemoveTag = r'<br.*?\/>|<img.*?>'
-                        # body_content = re.sub(patternRemoveUnusedAttr, '', body_content)
-                        # body_content = re.sub(patternRemoveTag, '', body_content)
-                        body_content = minify_html.minify(body_content, keep_closing_tags=True, minify_js=False, minify_css=False, remove_processing_instructions=True, keep_spaces_between_attributes=True)
-                        
-                        content_length = len(body_content)
-                        print(f"## content length : {content_length}")
-                        is_field_exceed = content_length >= field_size_limit
-                        if is_field_exceed:
-                            print('| field size limit exceed!', end=" ")
-
-                        contents_list.append({
-                            "title": title,
-                            "content": body_content,
-                            "parent_title": folder,
-                            "is_field_exceed": is_field_exceed
-                        })
             except Exception as e:
                 print(f"Error reading {file}: {e}")
 
-        # Store content list by folder index
         all_contents[folder_index] = contents_list
 
     return all_contents
 
-def create_output_files(all_contents):
-    print("## Creating Output CSV Files ##")
+def bulk_import_html_to_salesforce(all_contents):
+    print("## Bulk Uploading to Salesforce Knowledge ##")
 
-    # Remove all items in output_html
-    shutil.rmtree(output_result_folder, ignore_errors=True)
-
-    # Ensure output directory exists
-    os.makedirs(output_result_folder, exist_ok=True)
-    
     for folder_index, contents in all_contents.items():
-        output_filename = f"output-{folder_index}.csv"
-        output_filename_html = f"output-{folder_index}.html"
-        print(f"Creating: {output_filename}")
-
-        output_result_path = os.path.join(output_result_folder, output_filename)
-        
-
-        if not contents:
-            print(f"No content found for folder {folder_index}, skipping.")
-            continue
-
-        dataCreateCSV = {
-            "Knowledge__kav": [],
-            "Id": [],
-            "RecordTypeId": [],
-            "Title": [],
-            "UrlName": [],
-            "Summary": [],
-            "Answer": [],
-            "Categorie__c": [],
-            "Category__c": []
-        }
-
         for index, content in enumerate(contents):
-            ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
-            urlMock = f"URL-{ts}{index}"
-            dataCreateCSV["Knowledge__kav"].append(index)
-            dataCreateCSV["Id"].append("test")
-            dataCreateCSV["RecordTypeId"].append("012N00000036GnwIAE")
-            dataCreateCSV["Title"].append(content["title"] + "_(test-html-import)")
-            dataCreateCSV["UrlName"].append(urlMock)
-            dataCreateCSV["Summary"].append(content["title"])
-            dataCreateCSV["Answer"].append(content["content"])
-            dataCreateCSV["Categorie__c"].append("Auto Import")
-            dataCreateCSV["Category__c"].append("Knowledge Material")
+            if content["is_field_exceed"]:
+                print(f"⚠️ Skipping '{content['title']}' — field size too large.")
+                continue
 
-        df = pd.DataFrame(dataCreateCSV)
-        df.to_csv(output_result_path, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
+            try:
+                response = sf.Knowledge__kav.create({
+                    "Title": content["title"],
+                    "UrlName": f"url-{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+                    "Answer__c": content["content"],
+                    "RecordTypeId": "012N00000036GnwIAE",
+                    "Language": "en_US"
+                })
+                print(f"✅ Created article: {content['title']} (Id: {response['id']})")
+            except Exception as e:
+                print(f"❌ Failed to create article: {content['title']}", e)
 
-        for index, content in enumerate(contents):
-            with open(os.path.join(output_result_folder, output_filename_html), "w", encoding="utf-8") as f:
-                f.write(content["content"])
-
-    ## create result sum all file to one csv file.
-    sum_all_content = []
-    for item in all_contents.items():
-        key, value = item 
-        if len(item) == 0:
-            return
-        for sheet in value:
-            sum_all_content.append((sheet))
-    
-    dataCreateCSVOne = {
-        "Knowledge__kav": [],
-        "Id": [],
-        "RecordTypeId": [],
-        "Title": [],
-        "UrlName": [],
-        "Summary": [],
-        "Answer": [],
-        "Categorie__c": [],
-        "Category__c": []
-    }
-    
-    for index, obj in enumerate(sum_all_content): 
-        if obj["is_field_exceed"]:
-            print("found obj that has field exceed")
-            print(obj["title"], end=" | ")
-            continue
-        ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
-        urlMock = f"URL-{ts}{index}"
-        
-        dataCreateCSVOne["Knowledge__kav"].append(index)
-        dataCreateCSVOne["Id"].append("test")
-        dataCreateCSVOne["RecordTypeId"].append("012N00000036GnwIAE")
-
-        dataCreateCSVOne["Title"].append(obj["title"])
-        dataCreateCSVOne["UrlName"].append(urlMock)
-        dataCreateCSVOne["Summary"].append(obj["title"])
-        dataCreateCSVOne["Answer"].append(obj["content"])
-        dataCreateCSVOne["Categorie__c"].append("Auto Import")
-        dataCreateCSVOne["Category__c"].append("Knowledge Material")
-    
-    df = pd.DataFrame(dataCreateCSVOne)
-    name_result_one_csv = "output.csv"
-    path_of_one_file = os.path.join(output_result_folder, name_result_one_csv)
-    df.to_csv(path_of_one_file, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC, quotechar='"', escapechar="\\")
-    print(f"Creating: {name_result_one_csv}")
-    print("One for all CSV file created successfully!")
-
-
-def is_excel_or_csv(filename: str) -> bool:
-    pattern = r'.*\.(csv|xls|xlsx)$'
-    return bool(re.match(pattern, filename, re.IGNORECASE))
+# Pipeline
+excel_to_html()
+image_map = rename_images_and_refs()
+existing_titles = fetch_existing_file_titles()
+image_lookup = upload_missing_images(image_map, existing_titles)
+update_html_images(image_lookup)
+remove_all_black_color_tags()
+html_data = read_all_html_files()
+bulk_import_html_to_salesforce(html_data)
 
 def is_excel(filename: str) -> bool:
     pattern = r'.*\.(xls|xlsx)$'
@@ -313,37 +315,6 @@ def is_excel(filename: str) -> bool:
 
 def is_csv(filename: str) -> bool:
     pattern = r'.*\.(csv)$'
-    return bool(re.match(pattern, filename, re.IGNORECASE))
+    return bool(re.match(pattern, filename, re.IGNORECASE)) 
 
-def remove_all_black_color_tags():
-    print("## Removing all #000000 styles and attributes from HTML ##")
-
-    if not output_folder.exists():
-        print("No output_html folder found.")
-        return
-
-    html_folders = [folder for folder in output_folder.iterdir() if folder.is_dir()]
-    
-    for folder in html_folders:
-        html_files = list(folder.glob("*.html"))
-        for html_file in html_files:
-            try:
-                with open(html_file, "r", encoding="utf-8") as f:
-                    content = f.read()
-                content = re.sub(r'(style\s*=\s*["\'][^"\']*)#000000\s*;?', r'\1', content, flags=re.IGNORECASE)
-                content = re.sub(r'\s*color\s*=\s*["\']#000000["\']', '', content, flags=re.IGNORECASE)
-                content = content.replace("#000000", "")
-
-                with open(html_file, "w", encoding="utf-8") as f:
-                    f.write(content)
-
-                print(f"🧹 Cleaned all #000000 from: {html_file}")
-            except Exception as e:
-                print(f"Error cleaning {html_file}: {e}")
-
-
-excel_to_html()
-html_data = read_all_html_files()
-create_output_files(html_data)
-remove_all_black_color_tags()
 # %%
